@@ -22,6 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && rm -rf /var/lib/apt/lists/*
 ENV NODE_ENV=production \
     PORT=3001 \
+    MOTION_LAB_CONCURRENCY=2 \
     MOTION_LAB_DATA_DIR=/data \
     MOTION_LAB_BUNDLE_DIR=/app/apps/render/.bundle \
     MOTION_LAB_WEB_DIST=/app/apps/web/dist
@@ -30,4 +31,6 @@ COPY --from=build /app /app
 RUN node -e "require('@remotion/renderer').ensureBrowser().then(()=>console.log('browser ready'))"
 VOLUME ["/data"]
 EXPOSE 3001
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s CMD node -e "fetch('http://localhost:3001/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+# MOTION_LAB_RENDER_TOKEN must be provided at runtime (the server refuses to start without it in production).
 CMD ["node", "apps/render/dist/server.js"]

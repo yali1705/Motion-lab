@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Typecheck + engine tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      - run: npm run typecheck
+      - run: npm test
+
+  docker-qa:
+    name: Production Docker image + full QA
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      MOTION_LAB_RENDER_TOKEN: ci-render-key-0123456789abcdef
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.pw
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build production image
+        run: docker build -t motion-lab:ci .
+      - name: Start container (persistent /data volume)
+        run: |
+          docker volume create motion-lab-ci-data
+          docker run -d --name motion-lab -p 3001:3001 \
+            -e MOTION_LAB_RENDER_TOKEN="$MOTION_LAB_RENDER_TOKEN" \
+            -v motion-lab-ci-data:/data motion-lab:ci
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:3001/api/health; then echo; break; fi
+            sleep 2
+          done
+          curl -fsS http://localhost:3001/api/health
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      - name: Install QA tooling (ffmpeg + Playwright Chromium)
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg >/dev/null
+          npx --yes playwright@1.56.1 install --with-deps chromium
+      - name: Run QA against the container
+        run: node scripts/qa.mjs
+        env:
+          MOTION_LAB_URL: http://localhost:3001
+      - name: Container logs
+        if: always()
+        run: docker logs motion-lab | tail -100
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qa-output
+          path: qa/output
+          retention-days: 14

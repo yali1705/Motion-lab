@@ -4,7 +4,17 @@ Date: 2026-10-17 · Branch: `claude/motion-lab-mvp-build-m56418` · Run: `node s
 
 Environment: Linux x64 (4 vCPU, 15 GB), Node 22.22, Remotion 4.0.536, chrome-headless-shell 141 (render), Chromium 141 (preview screenshots), ffmpeg 6.1.1.
 
-## Result: 21 / 21 PASS
+## Update 2026-10-17 (deployment hardening): 23 / 23 PASS in production mode
+
+Re-run with the server started as in production (`NODE_ENV=production`, `MOTION_LAB_RENDER_TOKEN` set):
+authentication, per-job download tokens, resource limits (422), rate limiting (429 on the 7th render
+submission within 10 minutes — verified manually), security headers, and a new access-key prompt in the
+editor (UI-0). Full table: `qa/results-local-production-mode.md`. The server also refuses to start in
+production without a token or with a token shorter than 16 characters (verified).
+
+**Production deployment status: BLOCKED on hosting credentials** — see "Deployment" at the end of this report.
+
+## Result (initial build): 21 / 21 PASS
 
 | ID | Check | Result | Detail |
 |---|---|---|---|
@@ -81,3 +91,18 @@ Screenshots: `qa/screenshots/`.
 5. **Timeline zoom.** The timeline always fits the full duration to the screen width (≈1.2 px per frame on a 390 px phone); keyframes snap to whole frames and can be set precisely with the Frame field in the Keyframe tab.
 6. **Render throughput.** ~30 s for 5 s @ 60 fps on 4 vCPU with concurrency 2; jobs run one at a time per process.
 7. **No authentication / rate limiting** on the render API.
+
+## Deployment (added 2026-10-17)
+
+Target provider: **Fly.io** (persistent machine, volume mounted at `/data`, automatic HTTPS, 2 GB RAM for
+Chromium). Config: `fly.toml`, `Dockerfile`, `scripts/deploy-fly.sh`, `.github/workflows/deploy.yml`.
+
+| Step | Status | Detail |
+|---|---|---|
+| Production Node build verified locally | PASS | `npm run build` + server in production mode, 23/23 QA |
+| Production Docker image | see CI | Built and QA'd by `.github/workflows/ci.yml` on GitHub's runner (no Docker daemon in the authoring sandbox) |
+| Deploy to Fly.io | BLOCKED | No `FLY_API_TOKEN`; the sandbox's network policy also denies `api.fly.io` / `api.machines.dev`. The deploy workflow skips itself with a warning until the secrets exist. |
+| Public HTTPS URL tested | NOT DONE | Will be `https://<FLY_APP>.fly.dev`; the deploy workflow runs this same QA suite against it and publishes the table in the job summary. |
+
+Unblock from a phone: Fly.io account + payment method → create API token → add repository secrets
+`FLY_API_TOKEN` and `MOTION_LAB_RENDER_TOKEN` → run the "Deploy to Fly.io" workflow (Actions tab).

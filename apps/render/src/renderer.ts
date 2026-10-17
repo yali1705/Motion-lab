@@ -5,6 +5,7 @@ import type { Project } from '@motion-lab/engine';
 import { buildBundle } from './bundle.js';
 import { findBrowser } from './paths.js';
 import { listJobs, loadJob, outputPath, saveJob, type RenderJob } from './jobs.js';
+import { LIMITS } from './security.js';
 
 const COMPOSITION_ID = 'MotionLab';
 const MAX_ATTEMPTS = 2;
@@ -28,6 +29,11 @@ export function getServeUrl(): Promise<string> {
 const cancels = new Map<string, () => void>();
 let running = false;
 const queue: string[] = [];
+
+/** Jobs waiting plus the one rendering. */
+export function pendingCount(): number {
+  return queue.length + (running ? 1 : 0);
+}
 
 export function enqueue(jobId: string) {
   if (!queue.includes(jobId)) queue.push(jobId);
@@ -98,6 +104,11 @@ async function runJob(id: string) {
 
   const { cancelSignal, cancel } = makeCancelSignal();
   cancels.set(id, cancel);
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    cancel();
+  }, LIMITS.jobTimeoutMs);
   let lastSave = 0;
   const persist = (force = false) => {
     const now = Date.now();
@@ -159,14 +170,15 @@ async function runJob(id: string) {
     console.log(`[render] ${id} done (${job.outputBytes} bytes)`);
   } catch (e) {
     const msg = (e as Error).message ?? String(e);
-    const wasCancelled = /cancel/i.test(msg);
+    const wasCancelled = /cancel/i.test(msg) && !timedOut;
     job.status = wasCancelled ? 'cancelled' : 'failed';
     job.stage = job.status;
-    job.error = wasCancelled ? null : msg;
+    job.error = wasCancelled ? null : timedOut ? `Render exceeded the ${Math.round(LIMITS.jobTimeoutMs / 60000)} minute limit` : msg;
     job.finishedAt = new Date().toISOString();
     persist(true);
     console.error(`[render] ${id} ${job.status}: ${msg}`);
   } finally {
+    clearTimeout(timeout);
     cancels.delete(id);
   }
 }

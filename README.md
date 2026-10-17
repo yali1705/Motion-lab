@@ -110,16 +110,65 @@ export stills (SSIM/PSNR), then drives the editor on an emulated iPhone with tou
 Output lands in `qa/output/` (`results.md`, screenshots, `export.mp4`). The latest report
 is in `qa/QA_REPORT.md`.
 
+## Security
+
+The render API is protected; the editor itself is a static page.
+
+* **Authentication** — every `/api/*` route except `/api/health`, `/api/test-composition` and the
+  tokenised download requires `Authorization: Bearer <MOTION_LAB_RENDER_TOKEN>`. The token is
+  read only from the server environment (16+ characters; the server refuses to start in
+  production without it). The editor asks for it once in the Export sheet and keeps it in
+  `localStorage` on that device — it is never embedded in the client bundle.
+* **Downloads** — each job gets its own random download token, so `<a download>` links work
+  without headers and the API key never appears in a URL or a log.
+* **Validation** — projects are Zod-validated and then checked against resource limits
+  (`MOTION_LAB_MAX_FRAMES` 1800, `MOTION_LAB_MAX_PIXELS` 1080×1920, `MOTION_LAB_MAX_FPS` 60,
+  `MOTION_LAB_MAX_LAYERS` 20, text ≤ 2000 chars, ≤ 500 keyframes per property); request
+  bodies are capped at 1 MB.
+* **Resource limits** — at most `MOTION_LAB_MAX_PENDING` (4) jobs queued or rendering (429
+  otherwise), a hard per-job timeout (`MOTION_LAB_JOB_TIMEOUT_MS`, 10 min), and finished jobs
+  plus their MP4s are pruned after `MOTION_LAB_RETENTION_DAYS` (7).
+* **Rate limiting** — per client IP: 240 API requests/min, 6 render submissions per 10 min,
+  30 stills per 10 min, 60 downloads/min (in-memory; `trust proxy` is on for Fly.io).
+* Conservative headers (`nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy`, HSTS in
+  production).
+
 ## Deployment (HTTPS)
 
-The whole app is one Node process (editor + API + renderer). Deploy the included
-`Dockerfile` to any container host that terminates TLS (Fly.io, Railway, Render, Cloud
-Run, …) and mount a volume at `/data` so render jobs and MP4s persist:
+Target: **Fly.io** — a persistent Node.js machine with a mounted volume for render jobs,
+automatic HTTPS, and enough memory for Chromium. Everything ships as one Docker image
+(`Dockerfile`): editor, API and Remotion renderer (its own FFmpeg and chrome-headless-shell
+are downloaded at image build time).
+
+### One-time setup (can be done from a phone)
+
+1. Create a Fly.io account and add a payment method (required for machines + volumes).
+2. In the Fly dashboard create an **API token** (Account → Tokens).
+3. In this GitHub repository go to *Settings → Secrets and variables → Actions* and add:
+   * `FLY_API_TOKEN` — the token from step 2
+   * `MOTION_LAB_RENDER_TOKEN` — any secret of 16+ characters; this is the access key you
+     will type into the editor's Export sheet on your iPhone
+   * optional variables: `FLY_APP` (default `motion-lab-<github owner>`), `FLY_ORG`
+     (`personal`), `FLY_REGION` (`fra`)
+4. Run the **Deploy to Fly.io** workflow (Actions tab → Deploy to Fly.io → *Run workflow*),
+   or push to the deployment branch. The workflow creates the app and volume, sets the
+   secret, deploys, and then runs the full QA suite against the public URL.
+
+The app is then at `https://<FLY_APP>.fly.dev`.
+
+### Manual deploy
+
+```bash
+export FLY_API_TOKEN=…  MOTION_LAB_RENDER_TOKEN=…  FLY_APP=motion-lab-yourname
+scripts/deploy-fly.sh
+```
+
+### Any other Docker host
 
 ```bash
 docker build -t motion-lab .
-docker run -p 3001:3001 -v motion-lab-data:/data motion-lab
+docker run -p 3001:3001 -e MOTION_LAB_RENDER_TOKEN=change-me-0123456789 -v motion-lab-data:/data motion-lab
 ```
 
-The container needs ~2 GB RAM for Chromium while rendering. See `qa/QA_REPORT.md` for the
-deployment status of this build.
+The container needs ~2 GB RAM while rendering. CI (`.github/workflows/ci.yml`) builds this
+exact image on every push and runs the QA suite against it.

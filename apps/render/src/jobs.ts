@@ -1,8 +1,9 @@
-import { mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { ProjectSchema, type Project } from '@motion-lab/engine';
 import { JOBS_DIR } from './paths.js';
+import { newDownloadToken } from './security.js';
 
 export const JobStatusSchema = z.enum(['queued', 'rendering', 'done', 'failed', 'cancelled']);
 export type JobStatus = z.infer<typeof JobStatusSchema>;
@@ -23,6 +24,8 @@ export const RenderJobSchema = z.object({
   outputFile: z.string().nullable(),
   outputBytes: z.number().nullable(),
   attempts: z.number(),
+  /** Per-job secret that authorises GET …/download without the API key (never the API key itself). */
+  downloadToken: z.string().optional(),
   projectName: z.string(),
   width: z.number(),
   height: z.number(),
@@ -70,6 +73,22 @@ export function listJobs(): RenderJob[] {
     .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
 }
 
+/** Remove finished jobs (and their MP4s) older than `days`. Returns the number removed. */
+export function pruneJobs(days: number): number {
+  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+  let n = 0;
+  for (const job of listJobs()) {
+    if (job.status === 'queued' || job.status === 'rendering') continue;
+    const t = Date.parse(job.finishedAt ?? job.createdAt);
+    if (Number.isFinite(t) && t < cutoff) {
+      rmSync(jobPath(job.id), { force: true });
+      rmSync(outputPath(job.id), { force: true });
+      n++;
+    }
+  }
+  return n;
+}
+
 export function newJobId(): string {
   const d = new Date();
   const stamp = d.toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);
@@ -92,6 +111,7 @@ export function createJob(project: Project): RenderJob {
     outputFile: null,
     outputBytes: null,
     attempts: 0,
+    downloadToken: newDownloadToken(),
     projectName: project.name,
     width: project.width,
     height: project.height,

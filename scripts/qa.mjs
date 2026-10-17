@@ -21,6 +21,8 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const OUT = join(ROOT, 'qa', 'output');
 const BASE = (process.env.MOTION_LAB_URL ?? 'http://localhost:3001').replace(/\/$/, '');
 const SKIP_UI = process.argv.includes('--skip-ui');
+const TOKEN = process.env.MOTION_LAB_RENDER_TOKEN ?? '';
+const AUTH = TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {};
 const PARITY_FRAMES = [0, 20, 40, 60, 150, 299];
 // Tolerances (documented in qa/QA_REPORT.md)
 const SSIM_MIN_VS_MP4 = 0.97; // preview screenshot vs H.264 frame (lossy)
@@ -47,8 +49,8 @@ const assert = (cond, msg) => {
   if (!cond) throw new Error(msg);
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const getJson = async (p, init) => {
-  const r = await fetch(BASE + p, init);
+const getJson = async (p, init = {}) => {
+  const r = await fetch(BASE + p, { ...init, headers: { ...AUTH, ...(init.headers ?? {}) } });
   if (!r.ok) throw new Error(`${p} -> ${r.status} ${await r.text()}`);
   return r.json();
 };
@@ -100,16 +102,30 @@ let mp4 = null;
 await step('SRV-1', 'Render service health', async () => {
   const h = await getJson('/api/health');
   assert(h.ok, 'health not ok');
-  return `browser=${h.browserExecutable ?? 'default'} concurrency=${h.concurrency}`;
+  if (h.authRequired) assert(TOKEN, 'server requires a render key but MOTION_LAB_RENDER_TOKEN is not set for the QA run');
+  return `authRequired=${h.authRequired} browser=${h.browserExecutable ?? 'default'} concurrency=${h.concurrency}`;
 });
 await step('SRV-2', 'Test composition validates (Zod)', async () => {
   project = await getJson('/api/test-composition');
   assert(project.width === 1080 && project.height === 1920 && project.fps === 60 && project.durationFrames === 300, 'unexpected composition metadata');
   assert(project.background === '#111111', 'background');
   assert(project.layers.some((l) => l.text.replace('\n', ' ') === 'MOTION IS DESIGN'), 'headline text');
-  const bad = await fetch(BASE + '/api/render', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project: { ...project, fps: 'sixty' } }) });
+  const bad = await fetch(BASE + '/api/render', { method: 'POST', headers: { 'Content-Type': 'application/json', ...AUTH }, body: JSON.stringify({ project: { ...project, fps: 'sixty' } }) });
   assert(bad.status === 400, `invalid project should be rejected, got ${bad.status}`);
-  return `${project.layers.length} layers; invalid project rejected with 400`;
+  const huge = await fetch(BASE + '/api/render', { method: 'POST', headers: { 'Content-Type': 'application/json', ...AUTH }, body: JSON.stringify({ project: { ...project, durationFrames: 30000 } }) });
+  assert(huge.status === 422, `over-limit project should be rejected with 422, got ${huge.status}`);
+  return `${project.layers.length} layers; invalid project → 400; over-limit project → 422`;
+});
+await step('SEC-1', 'Render API requires the access key; download works via per-job token only', async () => {
+  const h = await getJson('/api/health');
+  if (!h.authRequired) return 'auth disabled on this server (development mode) — skipped';
+  const noKey = await fetch(BASE + '/api/render', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project }) });
+  assert(noKey.status === 401, `no key should be 401, got ${noKey.status}`);
+  const badKey = await fetch(BASE + '/api/jobs', { headers: { Authorization: 'Bearer definitely-not-the-key' } });
+  assert(badKey.status === 401, `bad key should be 401, got ${badKey.status}`);
+  const h2 = await fetch(BASE + '/api/health');
+  assert(h2.headers.get('x-content-type-options') === 'nosniff', 'security headers missing');
+  return 'missing key → 401, wrong key → 401, security headers present';
 });
 await step('REN-1', 'Render job completes (persistent job with progress)', async () => {
   job = await getJson('/api/render', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project }) });
@@ -127,7 +143,10 @@ await step('REN-1', 'Render job completes (persistent job with progress)', async
   return `${job.id} in ${((Date.now() - t0) / 1000).toFixed(0)}s, ${job.outputBytes} bytes, intermediate progress observed`;
 });
 await step('REN-2', 'MP4 downloads over HTTP', async () => {
-  const r = await fetch(`${BASE}/api/jobs/${job.id}/download`);
+  assert(job.downloadToken, 'job has no download token');
+  const noTok = await fetch(`${BASE}/api/jobs/${job.id}/download`);
+  if (TOKEN) assert(noTok.status === 401, `download without token should be 401, got ${noTok.status}`);
+  const r = await fetch(`${BASE}/api/jobs/${job.id}/download?t=${encodeURIComponent(job.downloadToken)}`);
   assert(r.ok, `download ${r.status}`);
   assert((r.headers.get('content-type') || '').includes('video/mp4'), 'content-type');
   const buf = Buffer.from(await r.arrayBuffer());
@@ -193,7 +212,7 @@ await step('PAR-1', 'Preview frames match exported frames (SSIM/PSNR within tole
     await page.screenshot({ path: shot, clip: { x: 0, y: 0, width: 1080, height: 1920 } });
     const mp4Frame = join(OUT, `mp4-${f}.png`);
     if (!existsSync(mp4Frame)) execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', mp4, '-vf', `select=eq(n\\,${f})`, '-vframes', '1', mp4Frame]);
-    const stillRes = await fetch(`${BASE}/api/still`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project, frame: f }) });
+    const stillRes = await fetch(`${BASE}/api/still`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...AUTH }, body: JSON.stringify({ project, frame: f }) });
     assert(stillRes.ok, `still ${stillRes.status}`);
     const still = join(OUT, `still-${f}.png`);
     writeFileSync(still, Buffer.from(await stillRes.arrayBuffer()));
@@ -244,9 +263,36 @@ if (!SKIP_UI) {
   };
   const shot = (name) => page.screenshot({ path: join(OUT, `ui-${name}.png`) });
 
-  await step('UI-1', 'Editor loads on iPhone viewport with the test composition', async () => {
+  await step('UI-0', 'Export sheet asks for the render access key and accepts it (key stays on device)', async () => {
     await page.goto(BASE + '/');
     await page.evaluate(() => localStorage.clear());
+    await page.reload();
+    await page.waitForSelector('[data-testid="canvas-stage"] [data-layer-id="layer_headline"]');
+    await tap('button:has-text("Export")');
+    const h = await getJson('/api/health');
+    if (!h.authRequired) {
+      await tap('button[aria-label="Close"]');
+      return 'auth disabled on this server (development mode) — key prompt not shown';
+    }
+    const keyInput = page.locator('input[aria-label="Render access key"]');
+    await keyInput.waitFor({ timeout: 10000 });
+    assert(await page.locator('button:has-text("Render 1080×1920 MP4")').isDisabled(), 'render button should be disabled without a key');
+    await keyInput.fill(TOKEN);
+    await tap('button:has-text("Save")');
+    await sleep(200);
+    assert(!(await page.locator('button:has-text("Render 1080×1920 MP4")').isDisabled()), 'render button should be enabled after saving the key');
+    const stored = await page.evaluate(() => localStorage.getItem('motion-lab:renderKey:v1'));
+    assert(stored === TOKEN, 'key not stored on device');
+    const html = await page.content();
+    assert(!html.includes(TOKEN) || html.includes('type="password"'), 'key must not be rendered in page text');
+    await shot('00-access-key');
+    await tap('button[aria-label="Close"]');
+    return 'key prompt shown, render disabled until a key is saved, key kept in localStorage only';
+  });
+
+  await step('UI-1', 'Editor loads on iPhone viewport with the test composition', async () => {
+    await page.goto(BASE + '/');
+    await page.evaluate((t) => { localStorage.clear(); if (t) localStorage.setItem('motion-lab:renderKey:v1', t); }, TOKEN);
     await page.reload();
     await page.waitForSelector('[data-testid="canvas-stage"] [data-layer-id="layer_headline"]');
     const n = await page.locator('[data-testid="canvas-stage"] [data-layer-id]').count();
@@ -472,6 +518,7 @@ if (!SKIP_UI) {
     const t0 = Date.now();
     await page.waitForSelector('a:has-text("Download MP4")', { timeout: 10 * 60 * 1000 });
     const href = await page.locator('a:has-text("Download MP4")').getAttribute('href');
+    if (TOKEN) assert(href.includes('?t=') && !href.includes(TOKEN), 'download link must carry a per-job token, never the API key');
     const r = await fetch(BASE + href, { method: 'HEAD' });
     assert(r.ok && (r.headers.get('content-type') || '').includes('video/mp4'), `download ${r.status}`);
     await shot('10-exported');

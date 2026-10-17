@@ -1,0 +1,94 @@
+name: Deploy to Fly.io
+
+# Deploys the production image to Fly.io and runs the full QA suite against
+# the public HTTPS URL. Needs two repository secrets:
+#   FLY_API_TOKEN            — from https://fly.io/dashboard → Tokens
+#   MOTION_LAB_RENDER_TOKEN  — your chosen render access key (16+ chars)
+# Optional repository variables: FLY_APP, FLY_ORG, FLY_REGION.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['claude/motion-lab-mvp-build-m56418', 'main']
+
+concurrency: deploy
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      url: ${{ steps.deploy.outputs.url }}
+      skipped: ${{ steps.check.outputs.skipped }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check secrets
+        id: check
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          MOTION_LAB_RENDER_TOKEN: ${{ secrets.MOTION_LAB_RENDER_TOKEN }}
+        run: |
+          if [ -z "$FLY_API_TOKEN" ] || [ -z "$MOTION_LAB_RENDER_TOKEN" ]; then
+            echo "::warning::FLY_API_TOKEN and/or MOTION_LAB_RENDER_TOKEN secrets are not set — skipping deployment."
+            echo "skipped=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skipped=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+        if: steps.check.outputs.skipped == 'false'
+      - name: Deploy
+        id: deploy
+        if: steps.check.outputs.skipped == 'false'
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          MOTION_LAB_RENDER_TOKEN: ${{ secrets.MOTION_LAB_RENDER_TOKEN }}
+          FLY_APP: ${{ vars.FLY_APP }}
+          FLY_ORG: ${{ vars.FLY_ORG }}
+          FLY_REGION: ${{ vars.FLY_REGION }}
+        run: |
+          export FLY_ORG="${FLY_ORG:-personal}"
+          export FLY_APP="${FLY_APP:-motion-lab-${{ github.repository_owner }}}"
+          FLY_APP=$(echo "$FLY_APP" | tr '[:upper:]' '[:lower:]')
+          export FLY_APP
+          scripts/deploy-fly.sh
+          echo "url=https://$FLY_APP.fly.dev" >> "$GITHUB_OUTPUT"
+          echo "### Deployed to https://$FLY_APP.fly.dev" >> "$GITHUB_STEP_SUMMARY"
+
+  qa:
+    name: QA against production URL
+    needs: deploy
+    if: needs.deploy.outputs.skipped == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.pw
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      - name: Install QA tooling (ffmpeg + Playwright Chromium)
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg >/dev/null
+          npx --yes playwright@1.56.1 install --with-deps chromium
+      - name: Run QA against ${{ needs.deploy.outputs.url }}
+        run: node scripts/qa.mjs
+        env:
+          MOTION_LAB_URL: ${{ needs.deploy.outputs.url }}
+          MOTION_LAB_RENDER_TOKEN: ${{ secrets.MOTION_LAB_RENDER_TOKEN }}
+      - name: Summary
+        if: always()
+        run: |
+          echo "## QA — ${{ needs.deploy.outputs.url }}" >> "$GITHUB_STEP_SUMMARY"
+          cat qa/output/results.md >> "$GITHUB_STEP_SUMMARY" || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: production-qa-output
+          path: qa/output
+          retention-days: 14

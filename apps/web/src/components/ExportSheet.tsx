@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useEditor } from '../store';
-import { api, type PublicJob } from '../lib/api';
+import { ApiError, api, getRenderKey, setRenderKey, type PublicJob } from '../lib/api';
 import { IconClose } from './Icons';
 
 const LAST_JOB_KEY = 'motion-lab:lastJob:v1';
@@ -18,20 +18,41 @@ export function ExportSheet() {
   const [job, setJob] = useState<PublicJob | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [authRequired, setAuthRequired] = useState<boolean | null>(null);
+  const [keyInput, setKeyInput] = useState(() => getRenderKey());
+  const [needKey, setNeedKey] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Ask the server whether a render access key is required.
+  useEffect(() => {
+    if (!open) return;
+    api
+      .health()
+      .then((h) => {
+        setAuthRequired(h.authRequired);
+        if (h.authRequired && !getRenderKey()) setNeedKey(true);
+      })
+      .catch((e) => setError((e as Error).message));
+  }, [open]);
+  const onApiError = (e: unknown) => {
+    if (e instanceof ApiError && e.status === 401) {
+      setNeedKey(true);
+      setError('The render access key was rejected. Enter the key configured on the server.');
+    } else setError((e as Error).message);
+  };
 
   // Resume tracking the last job after a reload.
   useEffect(() => {
     if (!open) return;
     const id = localStorage.getItem(LAST_JOB_KEY);
-    if (id && !job) api.getJob(id).then(setJob).catch(() => localStorage.removeItem(LAST_JOB_KEY));
+    if (id && !job && getRenderKey()) api.getJob(id).then(setJob).catch((e) => { if (!(e instanceof ApiError && e.status === 401)) localStorage.removeItem(LAST_JOB_KEY); });
   }, [open, job]);
 
   // Poll while active.
   useEffect(() => {
     if (!open || !job || (job.status !== 'queued' && job.status !== 'rendering')) return;
     timer.current = setTimeout(() => {
-      api.getJob(job.id).then(setJob).catch((e) => setError((e as Error).message));
+      api.getJob(job.id).then(setJob).catch(onApiError);
     }, 750);
     return () => {
       if (timer.current) clearTimeout(timer.current);
@@ -48,10 +69,15 @@ export function ExportSheet() {
       localStorage.setItem(LAST_JOB_KEY, j.id);
       setJob(j);
     } catch (e) {
-      setError((e as Error).message);
+      onApiError(e);
     } finally {
       setBusy(false);
     }
+  };
+  const saveKey = () => {
+    setRenderKey(keyInput.trim());
+    setNeedKey(false);
+    setError(null);
   };
   const active = job && (job.status === 'queued' || job.status === 'rendering');
   const pct = job ? Math.round(job.progress * 100) : 0;
@@ -74,6 +100,17 @@ export function ExportSheet() {
           {project.width}×{project.height} · {project.fps} fps · {seconds}s ({project.durationFrames} frames) · H.264 · {project.layers.length} layer{project.layers.length === 1 ? '' : 's'}
         </div>
 
+        {authRequired && (needKey || !getRenderKey()) ? (
+          <div className="flex flex-col gap-2 rounded-xl bg-panel-2 border border-line p-3">
+            <div className="text-[13px] font-semibold">Render access key</div>
+            <p className="text-[12px] text-muted">Cloud rendering is protected. Enter the key set on the server (MOTION_LAB_RENDER_TOKEN). It is stored only on this device.</p>
+            <div className="flex gap-2">
+              <input type="password" autoComplete="off" aria-label="Render access key" value={keyInput} onChange={(e) => setKeyInput(e.target.value)} className="flex-1 min-w-0 px-2 py-2 font-mono" placeholder="access key" />
+              <button className="btn btn-primary" disabled={keyInput.trim().length < 8} onClick={saveKey}>Save</button>
+            </div>
+          </div>
+        ) : null}
+
         {job ? (
           <div className="flex flex-col gap-2 rounded-xl bg-panel-2 border border-line p-3">
             <div className="flex items-center text-[13px]">
@@ -88,10 +125,10 @@ export function ExportSheet() {
             {job.error ? <div className="text-[12px] text-red-400 break-words">{job.error}</div> : null}
             {job.status === 'done' ? (
               <div className="flex gap-2 pt-1">
-                <a className="btn btn-primary flex-1" href={api.downloadUrl(job.id)} download>
+                <a className="btn btn-primary flex-1" href={api.downloadUrl(job)} download>
                   Download MP4
                 </a>
-                <a className="btn" href={api.downloadUrl(job.id, true)} target="_blank" rel="noreferrer">
+                <a className="btn" href={api.downloadUrl(job, true)} target="_blank" rel="noreferrer">
                   Open
                 </a>
               </div>
@@ -107,11 +144,17 @@ export function ExportSheet() {
 
         {error ? <div className="text-[12px] text-red-400 break-words">{error}</div> : null}
 
-        <button className="btn btn-primary h-12 text-[15px]" disabled={busy || !!active || project.layers.length === 0} onClick={start}>
+        <button className="btn btn-primary h-12 text-[15px]" disabled={busy || !!active || project.layers.length === 0 || (authRequired === true && !getRenderKey())} onClick={start}>
           {busy ? 'Submitting…' : job && !active ? 'Render again' : 'Render 1080×1920 MP4'}
         </button>
         <p className="text-[11px] text-muted">
           Rendering happens on the server with Remotion + FFmpeg using the same animation engine as this preview. Jobs are persisted; you can close this sheet and come back.
+          {authRequired && getRenderKey() && !needKey ? (
+            <>
+              {' '}
+              <button className="underline" onClick={() => setNeedKey(true)}>Change access key</button>
+            </>
+          ) : null}
         </p>
       </div>
     </div>
