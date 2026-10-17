@@ -100,7 +100,7 @@ Chromium). Config: `fly.toml`, `Dockerfile`, `scripts/deploy-fly.sh`, `.github/w
 | Step | Status | Detail |
 |---|---|---|
 | Production Node build verified locally | PASS | `npm run build` + server in production mode, 23/23 QA |
-| Production Docker image | see CI | Built and QA'd by `.github/workflows/ci.yml` on GitHub's runner (no Docker daemon in the authoring sandbox) |
+| Production Docker image | PASS | Built by `.github/workflows/ci.yml` on GitHub's runner (64 s), container started with `MOTION_LAB_RENDER_TOKEN` and a `/data` volume, health check OK, **23/23 QA checks passed against the container** (MP4 300 frames in 14 s). Run: https://github.com/yali1705/Motion-lab/actions/runs/39041832272 ; artifact `qa-output`. |
 | Deploy to Fly.io | BLOCKED | No `FLY_API_TOKEN`; the sandbox's network policy also denies `api.fly.io` / `api.machines.dev`. The deploy workflow skips itself with a warning until the secrets exist. |
 | Public HTTPS URL tested | NOT DONE | Will be `https://<FLY_APP>.fly.dev`; the deploy workflow runs this same QA suite against it and publishes the table in the job summary. |
 
