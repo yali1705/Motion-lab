@@ -1,0 +1,26 @@
+{
+  "name": "motion-lab",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Motion Lab — iPhone-first motion graphics editor with cloud rendering",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w @motion-lab/engine && npm run build -w @motion-lab/web && npm run build -w @motion-lab/render",
+    "dev": "npm run build -w @motion-lab/engine && concurrently -n web,render -c cyan,magenta \"npm run dev -w @motion-lab/web\" \"npm run dev -w @motion-lab/render\"",
+    "start": "npm run start -w @motion-lab/render",
+    "test": "npm run test -w @motion-lab/engine",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "qa": "node scripts/qa.mjs"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "playwright-core": "^1.56.1",
+    "typescript": "~5.9.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
