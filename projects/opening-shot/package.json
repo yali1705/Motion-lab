@@ -1,0 +1,24 @@
+{
+  "name": "opening-shot",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Standalone 4s documentary opening shot (Remotion). Isolated from the motion-lab workspaces.",
+  "scripts": {
+    "studio": "remotion studio src/index.ts",
+    "audio": "python3 scripts/build_audio.py",
+    "qa": "bash scripts/qa.sh out/opening_shot.mp4",
+    "render": "remotion render src/index.ts OpeningShot out/opening_shot.mp4 --codec=h264 --crf=16 --pixel-format=yuv420p --color-space=bt709 --audio-codec=aac --audio-bitrate=320k ${CHROME:+--browser-executable=$CHROME}"
+  },
+  "dependencies": {
+    "@fontsource/heebo": "5.2.5",
+    "@fontsource/karantina": "5.2.5",
+    "@remotion/cli": "4.0.539",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "remotion": "4.0.539"
+  },
+  "devDependencies": {
+    "@types/react": "19.1.8",
+    "typescript": "5.9.3"
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "_comment": "Single source of truth for picture + sound timing. Frames @30fps. Both src/ (Remotion) and scripts/build_audio.py read this file.",
+  "fps": 30,
+  "durationInFrames": 120,
+  "width": 1080,
+  "height": 1920,
+  "vo": {
+    "source": "input/narration_full.mp3",
+    "sourceIn": 0.0,
+    "sourceOut": 1.74,
+    "fadeOutSec": 0.08,
+    "offsetSec": 0.3,
+    "sentence": "תחשבו על הסיטואציה הזאת רגע.",
+    "timingMethod": "acoustic (energy + sibilant + pitch tracking); no ASR model reachable from this environment",
+    "sourceWordTimesSec": [
+      { "text": "תחשבו", "start": 0.04, "end": 0.30 },
+      { "text": "על", "start": 0.32, "end": 0.44 },
+      { "text": "הסיטואציה", "start": 0.44, "end": 1.12 },
+      { "text": "הזאת", "start": 1.12, "end": 1.34 },
+      { "text": "רגע", "start": 1.36, "end": 1.64 }
+    ]
+  },
+  "words": [
+    { "text": "תחשבו", "start": 10, "end": 18 },
+    { "text": "על", "start": 19, "end": 22 },
+    { "text": "הסיטואציה", "start": 22, "end": 43 },
+    { "text": "הזאת", "start": 43, "end": 49 },
+    { "text": "רגע", "start": 50, "end": 58 }
+  ],
+  "events": {
+    "crackDraw": [0, 4],
+    "tearOpen": [3, 15],
+    "kickerSlide": [8, 14],
+    "kickerContact": 12,
+    "kickerWord2": 19,
+    "sheetSlide": [17, 27],
+    "sheetContact": 25,
+    "heroSlices": [21, 36],
+    "redactions": [[31, 36], [35, 40], [39, 44], [42, 47]],
+    "stamp": [44, 47],
+    "stampContact": 45,
+    "freeze": 50,
+    "panelSlam": [50, 53],
+    "rega": 51,
+    "cameraCreep": [58, 120],
+    "markerCircle": [64, 86],
+    "tearOutCrack": [98, 108],
+    "tearOutOpen": [108, 120]
+  }
+}
